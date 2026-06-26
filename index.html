@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>How Semiconductors Work — Interactive Simulation</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <!-- ============================================================= -->
+  <!-- TOP TITLE BAR                                                  -->
+  <!-- ============================================================= -->
+  <header id="titlebar">
+    <div class="title-left">
+      <h1>⚛️ How Semiconductors Work</h1>
+      <span class="subtitle">From a single atom → to an LED → to a transistor</span>
+    </div>
+    <div class="title-right">
+      <label class="switch">
+        <input type="checkbox" id="reducedMotion" />
+        <span>Reduced motion (slow)</span>
+      </label>
+    </div>
+  </header>
+
+  <!-- ============================================================= -->
+  <!-- SCENE TABS                                                     -->
+  <!-- ============================================================= -->
+  <nav id="tabs"><!-- tabs injected by JS --></nav>
+
+  <!-- ============================================================= -->
+  <!-- MAIN LAYOUT: stage (canvas + controls) + sidebar              -->
+  <!-- ============================================================= -->
+  <main id="layout">
+    <section id="stage">
+      <div id="sceneHeading">
+        <h2 id="sceneTitle">Scene</h2>
+        <div id="sceneSub"></div>
+      </div>
+
+      <!-- Canvas the simulation draws into -->
+      <div id="canvasWrap">
+        <canvas id="canvas"></canvas>
+      </div>
+
+      <!-- Per-scene controls injected here -->
+      <div id="controls"></div>
+    </section>
+
+    <!-- ----------------------------------------------------------- -->
+    <!-- SIDEBAR: legend, reminder, info panel, event log            -->
+    <!-- ----------------------------------------------------------- -->
+    <aside id="sidebar">
+
+      <!-- Permanent color legend -->
+      <div class="panel" id="legend">
+        <h3>Legend</h3>
+        <ul class="legend-list">
+          <li><span class="dot free">−</span> Free electron (conduction band, mobile)</li>
+          <li><span class="dot valence">−</span> Bonded / valence electron</li>
+          <li><span class="dot hole">+</span> Hole (absence of an electron)</li>
+          <li><span class="dot nucleus">Si</span> Atom nucleus / lattice core</li>
+          <li><span class="dot photon">✦</span> Photon (light)</li>
+          <li><span class="arrow-key">→</span> Electric field / voltage push</li>
+        </ul>
+      </div>
+
+      <!-- Permanent physics reminder -->
+      <div class="panel reminder">
+        <strong>Remember:</strong>
+        Charge never changes (always −1). Only <em>ENERGY</em> changes.
+        The band gap is a gap in <em>energy</em>, not in space.
+      </div>
+
+      <!-- Info panel: What / Why -->
+      <div class="panel" id="infoPanel">
+        <h3>What am I looking at?</h3>
+        <p id="whatText">—</p>
+        <h3>Why does this happen?</h3>
+        <p id="whyText">—</p>
+      </div>
+
+      <!-- Live, timestamped event log -->
+      <div class="panel" id="logPanel">
+        <h3>Event log</h3>
+        <div id="log"></div>
+      </div>
+    </aside>
+  </main>
+
+  <!-- Tooltip element reused by all glossary terms -->
+  <div id="tooltip" role="tooltip"></div>
+
+  <script src="script.js"></script>
+</body>
+</html>

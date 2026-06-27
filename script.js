@@ -1000,160 +1000,363 @@ SCENES.push({
 SCENES.push({
   title: '7. The LED',
   sub: 'A forward-biased diode that turns the battery\'s energy into light.',
-  what: 'A forward-biased diode wired in a full loop to a battery. Follow one electron: it enters the n-side at high energy, drifts to the junction, drops into a hole, and emits a <span class="term" data-t="photon">photon</span> — light!',
-  why: 'At the junction each free electron drops from the conduction band into a hole (an instant jump) and releases its extra energy as a photon. That energy came from the BATTERY: the electron is a courier carrying energy around the loop and delivering it as light.',
-  controls: ['ledCurrent', 'bandGap', 'transport'],
-  setup(){ this.couriers=[]; this.photons=[]; this.spawnTimer=0; this.t=0; },
-  // map band-gap slider → photon color (small gap = red ... large = violet)
-  photonColor(){
-    const g = STATE.bandGap/100;
-    if(g<0.33) return '#ff5a5a';        // red (small gap)
-    if(g<0.66) return '#5aff7a';        // green (medium)
-    return '#7a8cff';                   // blue/violet (large)
+  what: 'A forward-biased diode wired in a full loop to a battery with a <span class="term" data-t="current-limiting resistor">resistor</span>. Follow one electron: it enters the n-side at high energy, drifts to the junction, drops into a hole, and emits a <span class="term" data-t="photon">photon</span> — light! Pick a <span class="term" data-t="III–V compound">material</span> to change the color.',
+  why: 'At the junction each free electron drops from the conduction band into a hole (an instant jump) and releases its extra energy as a <span class="term" data-t="band gap (eV)">photon of energy = the band gap</span>. That energy came from the BATTERY. A bigger gap → bluer photon. Defects steal that energy as heat; no resistor lets the current run away and burn the LED out.',
+  // FEATURE 5 material, FEATURE 6/3b resistor, FEATURE 3c crystal quality,
+  // FEATURE 4 spotlight. (bandGap slider kept for fine color control.)
+  controls: ['material', 'resistor', 'crystalQuality', 'spotlight', 'reset', 'transport'],
+
+  // ---- circuit constants (FEATURE 6, Arduino-style numbers) ----
+  V_SUPPLY: 5, V_LED: 2, MAX_SAFE: 20 /*mA*/, BURN_MA: 45 /*mA*/,
+
+  setup(){
+    this.couriers=[]; this.photons=[]; this.heats=[]; this.spawnTimer=0; this.t=0;
+    this.current=0;          // animated displayed current (mA)
+    this.burned=false; this.burnT=0;
+    this.spotlightOn=false; this.stepMode=false; this.spotAdvance=0;
+    this.buildDefects();
   },
-  colorName(){ const g=STATE.bandGap/100; return g<0.33?'red':g<0.66?'green':'blue/violet'; },
+  resetDevice(){
+    // keep spotlight/step prefs but clear the destroyed state
+    const spot=this.spotlightOn, step=this.stepMode;
+    this.setup(); this.spotlightOn=spot; this.stepMode=step;
+    logEvent('🔧 LED reset.');
+  },
+
+  // FEATURE 2: a powered, forward-biased LED conducts (unless burned out).
+  conduction(){
+    if(this.burned) return { road:false, roadWhy:'burned out', band:false, bandWhy:'device destroyed' };
+    return { road:true, roadWhy:'full circuit loop', band:true, bandWhy:'forward bias, carriers cross' };
+  },
+
+  /* ---- FEATURE 6: real-circuit current model -----------------------
+     I = (V_supply − V_LED) / R.  With R=330Ω → ~9 mA (safe). With no
+     resistor (or R→0) the current runs away and the LED burns out. ---- */
+  targetCurrent(){
+    if(STATE.resistorOn && STATE.resistorVal > 0){
+      return (this.V_SUPPLY - this.V_LED) / STATE.resistorVal * 1000; // mA
+    }
+    return 999; // no limit → runaway
+  },
+  runaway(){ return !STATE.resistorOn || STATE.resistorVal <= 0 || this.targetCurrent() > this.BURN_MA; },
+  // brightness/spawn level normalised to the safe current (capped at burnout)
+  currentLevel(){ return clamp(this.current / this.MAX_SAFE, 0, 1.4); },
+
+  // FEATURE 5: photon color comes from the chosen material.
+  photonColor(){ return material().color; },
+  colorName(){ return material().colorName; },
+
+  // FEATURE 3c: scatter defect "potholes" near the junction/p-side.
+  buildDefects(){
+    this.defects=[];
+    const n = Math.round(STATE.crystalQuality * 10);
+    for(let i=0;i<n;i++) this.defects.push({ x: lerp(W*0.5, W*0.68, Math.random()), y: 120 + rand(-10,26) });
+  },
+
   update(dt){
     this.t+=dt;
-    // geometry of the loop
-    const L = this.layout();
-    // spawn couriers at a rate set by the current slider
-    const rate = (STATE.voltage+5)/10; // reuse voltage slider 0..1 via ledCurrent control
-    const cur = this.currentLevel();
-    this.spawnTimer += dt;
-    const interval = lerp(1.1, 0.18, cur);
-    if(this.spawnTimer > interval){
-      this.spawnTimer = 0;
-      this.couriers.push({ stage:'wire-in', p:0, energy:'high', jitter:rand(-6,6) });
-    }
-    // advance couriers along the loop path (advance() runs the stage
-    // machine and moves each courier; it owns the progress value e.p).
-    for(const e of this.couriers){
-      this.advance(e, L, dt);
-    }
-    this.couriers = this.couriers.filter(e=>!e.done);
+    if(STATE.crystalQuality !== this._cq){ this._cq=STATE.crystalQuality; this.buildDefects(); }
+
+    // ---- FEATURE 3b: animate current toward target; detect burnout ----
+    if(!this.burned){
+      const tgt=this.targetCurrent();
+      this.current += (Math.min(tgt, 300) - this.current) * Math.min(1, dt*2.5);
+      if(this.runaway()) this.current += dt*55;          // keeps climbing — runaway
+      if(this.current > this.BURN_MA){
+        this.burned=true; this.burnT=0;
+        logEvent('💥 No current limit → current ran away past MAX SAFE → LED BURNED OUT.');
+      }
+    } else { this.burnT+=dt; }
+
+    // photons & heat always fade out (even while burned)
     this.photons.forEach(p=>{p.life-=dt; p.x+=p.vx*dt; p.y+=p.vy*dt;});
     this.photons=this.photons.filter(p=>p.life>0);
+    this.heats.forEach(h=>h.life-=dt);
+    this.heats=this.heats.filter(h=>h.life>0);
+    if(this.burned){ this.couriers=[]; return; }
+
+    // ---- spawn couriers at a rate set by the current ----
+    const cur=this.currentLevel();
+    this.spawnTimer += dt;
+    const interval = lerp(1.1, 0.16, clamp(cur,0,1));
+    if(cur>0.02 && this.spawnTimer > interval){
+      this.spawnTimer = 0;
+      this.couriers.push({ stageIndex:0, p:0, energy:'high', jitter:rand(-6,6) });
+    }
+    // FEATURE 4: ensure exactly one spotlight courier exists when ON
+    if(this.spotlightOn && !this.couriers.some(e=>e.spot)){
+      this.couriers.push({ stageIndex:0, p:0, energy:'high', jitter:0, spot:true });
+    }
+
+    for(const e of this.couriers) this.advance(e, dt);
+    this.couriers = this.couriers.filter(e=>!e.done);
   },
-  currentLevel(){ return clamp((STATE.voltage+5)/10,0,1); }, // 0..1
-  layout(){
-    // Define the rectangular circuit loop. The device sits along the top.
-    const m=70;
-    return {
-      nWire:{x1:m,y:120,x2:W*0.32},          // wire into n-side (top-left)
-      nSide:{x1:W*0.32,x2:W*0.5,y:120},
-      junction:W*0.5,
-      pSide:{x1:W*0.5,x2:W*0.68,y:120},
-      pWire:{x1:W*0.68,x2:W-m,y:120},
-      battery:{x:W-m,y:120},
-      // segment lengths for pacing (rough)
-      segLen:[W*0.32-m, W*0.18, W*0.18, (W-m)-W*0.68, 200],
-    };
-  },
-  advance(e, L, dt){
-    // We model the journey as discrete stages with a 0..1 progress each.
-    if(e.stageIndex===undefined){ e.stageIndex=0; e.p=0; }
-    e.p += lerp(0.12,0.45,this.currentLevel())*dt;
+
+  advance(e, dt){
     const yTop=120, yBot=H-70;
+    // FEATURE 4: the spotlighted electron can be stepped one stage at a time.
+    let step = lerp(0.12, 0.5, clamp(this.currentLevel(),0,1)) * dt;
+    if(e.spot && this.stepMode){
+      if(this.spotAdvance > 0){ step = 0.9 * dt * 4; }  // advancing one stage
+      else step = 0;                                    // frozen between steps
+    }
+    const before = e.stageIndex;
+    e.p += step;
     switch(e.stageIndex){
       case 0: // enter n-side from wire (high energy, amber)
         e.x = lerp(70, W*0.32, e.p); e.y=yTop + e.jitter*Math.sin(this.t*5);
         if(e.p>=1){ e.stageIndex=1; e.p=0; }
         break;
-      case 1: // drift through n-side toward junction (drift + jitter)
+      case 1: // drift through n-side toward the junction
         e.x = lerp(W*0.32, W*0.5, e.p); e.y=yTop + Math.sin(this.t*6+e.jitter)*6;
         if(e.p>=1){ e.stageIndex=2; e.p=0;
-          // THE KEY EVENT: recombination + photon in the SAME frame
-          this.emitPhoton(W*0.5, yTop);
+          // THE KEY EVENT: recombination. Photon — or HEAT at a defect.
+          this.recombine(e, W*0.5, yTop);
         }
         break;
-      case 2: // now a low-energy valence electron, hop hole-to-hole in p-side
+      case 2: // low-energy valence electron, hop hole-to-hole in p-side
         e.energy='low';
         e.x = lerp(W*0.5, W*0.68, e.p);
-        e.y = yTop + 30 + Math.abs(Math.sin(e.p*Math.PI*5))*-18; // little hops
+        e.y = yTop + 30 + Math.abs(Math.sin(e.p*Math.PI*5))*-18;
         if(e.p>=1){ e.stageIndex=3; e.p=0;
-          logEvent('🕳️ Electron exited p-side into the wire → left behind a fresh hole (device never clogs).');
-        }
+          if(!e.spot) logEvent('🕳️ Electron exited p-side into the wire → left a fresh hole (device never clogs).'); }
         break;
       case 3: // travel through p-wire to the battery
         e.x = lerp(W*0.68, W-70, e.p); e.y=yTop;
         if(e.p>=1){ e.stageIndex=4; e.p=0; }
         break;
-      case 4: // down/around through battery, re-energized, back to start
-        e.x = lerp(W-70, 70, e.p); e.y = lerp(yTop, yBot, Math.sin(e.p*Math.PI)) ;
+      case 4: // around through the battery, re-energized, back to start
+        e.x = lerp(W-70, 70, e.p); e.y = lerp(yTop, yBot, Math.sin(e.p*Math.PI));
         if(e.p>=0.5 && !e.recharged){ e.recharged=true; e.energy='high';
-          logEvent('🔋 Battery re-energized the electron (lifted back to high energy) — round trip complete.'); }
-        if(e.p>=1){ e.done=true; }
+          if(!e.spot) logEvent('🔋 Battery re-energized the electron — round trip complete.'); }
+        if(e.p>=1){ if(e.spot){ e.stageIndex=0; e.p=0; e.recharged=false; } else e.done=true; }
         break;
     }
+    // consume one "stage step" once a boundary is crossed
+    if(e.spot && this.stepMode && this.spotAdvance>0 && e.stageIndex!==before) this.spotAdvance=0;
   },
-  emitPhoton(x,y){
-    const color=this.photonColor();
-    for(let i=0;i<1;i++){
+
+  // FEATURE 3c: emit a photon, OR heat if this recombination hits a defect.
+  recombine(e, x, y){
+    // spotlight courier always shows the clean photon story
+    const hitsDefect = !e.spot && Math.random() < STATE.crystalQuality;
+    if(hitsDefect){
+      this.heats.push({ x, y, life:0.9 });
+      if(Math.random()<0.5) logEvent('🔥 Recombined at a DEFECT → energy released as HEAT, not light.');
+    } else {
+      const color=this.photonColor();
       const a=rand(-Math.PI*0.75,-Math.PI*0.25);
-      this.photons.push({x,y,vx:Math.cos(a)*120,vy:Math.sin(a)*120,life:1.1,color});
+      this.photons.push({x,y,vx:Math.cos(a)*120,vy:Math.sin(a)*120,life:1.1,color,visible:material().visible});
+      if(e.spot) logEvent(`✨ Spotlight electron dropped into a hole → photon emitted (energy = ${material().gapEV} eV = the band gap).`);
+      else if(Math.random()<0.6) logEvent(`⚡ Recombination → ${this.colorName()} photon. Energy released = band gap (${material().gapEV} eV).`);
     }
-    logEvent(`⚡ Recombination → photon emitted (${this.colorName()}). Energy released = band gap.`);
   },
+
+  // FEATURE 4: spotlight controls (wired from addSpotlightControls)
+  toggleSpotlight(){
+    this.spotlightOn=!this.spotlightOn;
+    this.stepMode=this.spotlightOn;          // spotlight implies freeze-frame stepping
+    if(!this.spotlightOn){ this.couriers.forEach(e=>e.spot=false); }
+    logEvent(this.spotlightOn?'🔦 Spotlight ON — tracking one electron around the loop (use ⏭ Step).':'🔦 Spotlight OFF.');
+    return this.spotlightOn;
+  },
+  spotlightStep(){ this.spotAdvance=1; },
+
   draw(c){
-    const L=this.layout(); const yTop=120, yBot=H-70;
+    const yTop=120, yBot=H-70;
+    const dim = this.spotlightOn ? 0.2 : 1;   // FEATURE 4: dim everyone but the star
+
     // ---- circuit wire loop ----
+    c.globalAlpha=dim;
     c.strokeStyle=COLORS.wire; c.lineWidth=3;
     c.beginPath();
-    c.moveTo(70,yTop); c.lineTo(W-70,yTop);          // top wire
-    c.lineTo(W-70,yBot); c.lineTo(70,yBot);          // right down, bottom
-    c.lineTo(70,yTop);                               // left up
+    c.moveTo(70,yTop); c.lineTo(W-70,yTop);
+    c.lineTo(W-70,yBot); c.lineTo(70,yBot);
+    c.lineTo(70,yTop);
     c.stroke();
+    c.globalAlpha=1;
+
+    // ---- FEATURE 6: series resistor drawn on the bottom wire ----
+    this.drawResistor(c, W*0.5, yBot);
 
     // ---- device region along the top ----
-    c.lineWidth=14; c.strokeStyle='rgba(255,107,107,0.25)';
-    c.beginPath(); c.moveTo(W*0.32,yTop); c.lineTo(W*0.5,yTop); c.stroke(); // n-side body? color below
-    // n-side (amber) and p-side (coral)
+    c.globalAlpha=dim;
+    c.lineWidth=14;
     c.strokeStyle='rgba(255,194,51,0.22)'; c.beginPath(); c.moveTo(W*0.32,yTop); c.lineTo(W*0.5,yTop); c.stroke();
     c.strokeStyle='rgba(255,107,107,0.22)'; c.beginPath(); c.moveTo(W*0.5,yTop); c.lineTo(W*0.68,yTop); c.stroke();
     label(c,W*0.41,yTop-44,'n-side',{align:'center',color:COLORS.free,weight:'700'});
     label(c,W*0.59,yTop-44,'p-side',{align:'center',color:COLORS.hole,weight:'700'});
-    // junction marker
     c.strokeStyle='#bcd0ff'; c.setLineDash([4,3]); c.beginPath(); c.moveTo(W*0.5,yTop-18); c.lineTo(W*0.5,yTop+18); c.stroke(); c.setLineDash([]);
     label(c,W*0.5,yTop-72,'⚡ junction: electrons drop into holes here → LIGHT',{align:'center',color:'#fff7d6',size:12,weight:'700'});
-
-    // resting holes in p-side
     for(let i=0;i<8;i++){ const x=lerp(W*0.5,W*0.68,(i+0.5)/8); drawHole(c,x,yTop+ (i%2?14:-2),6); }
+    c.globalAlpha=1;
+
+    // FEATURE 3c: defect "potholes"
+    this.defects.forEach(d=>{
+      c.fillStyle='rgba(120,70,40,0.85)'; c.strokeStyle='#a05a2c'; c.lineWidth=1.5;
+      c.beginPath(); c.arc(d.x,d.y,5,0,Math.PI*2); c.fill(); c.stroke();
+    });
+    if(this.defects.length){ label(c, W*0.59, yTop+52, `⚠ ${this.defects.length} defects: some energy → heat`, {align:'center', color:'#c98a5a', size:10}); }
 
     // battery
-    this.drawBattery(c, W-70, yBot);
+    c.globalAlpha=dim; this.drawBattery(c, W-70, yBot); c.globalAlpha=1;
 
-    // couriers
+    // ---- couriers (spotlight star at full brightness, others dimmed) ----
     for(const e of this.couriers){
-      if(e.energy==='high') drawFreeElectron(c,e.x,e.y,8);
-      else drawValenceElectron(c,e.x,e.y,7);
+      if(this.spotlightOn && e.spot){
+        // halo + short trailing path
+        c.save(); const halo=c.createRadialGradient(e.x,e.y,2,e.x,e.y,22);
+        halo.addColorStop(0,'rgba(255,255,255,0.5)'); halo.addColorStop(1,'rgba(255,255,255,0)');
+        c.fillStyle=halo; c.beginPath(); c.arc(e.x,e.y,22,0,Math.PI*2); c.fill(); c.restore();
+        if(e.energy==='high') drawFreeElectron(c,e.x,e.y,9); else drawValenceElectron(c,e.x,e.y,8);
+      } else {
+        c.globalAlpha=dim;
+        if(e.energy==='high') drawFreeElectron(c,e.x,e.y,8); else drawValenceElectron(c,e.x,e.y,7);
+        c.globalAlpha=1;
+      }
     }
-    // photons flying out of the device
-    this.photons.forEach(p=>drawPhoton(c,p.x,p.y, 1+(1.1-p.life), p.color));
 
-    // glow proportional to current (brightness ↔ current)
+    // photons (faint/dark for invisible infrared materials) + heat glyphs
+    this.photons.forEach(p=>{
+      if(p.visible) drawPhoton(c,p.x,p.y, 1+(1.1-p.life), p.color);
+      else drawPhoton(c,p.x,p.y, 0.8, 'rgba(120,90,90,0.5)');  // infrared = invisible
+    });
+    this.heats.forEach(h=>drawHeat(c,h.x,h.y, 1+(0.9-h.life), clamp(h.life,0,1)));
+
+    // ---- brightness glow ∝ current, reduced by defects & invisibility ----
     const cur=this.currentLevel();
-    const glow = c.createRadialGradient(W*0.5,yTop,4, W*0.5,yTop, 60+cur*120);
-    glow.addColorStop(0,`rgba(255,247,214,${0.15+cur*0.5})`);
+    const visK = material().visible ? 1 : 0.12;
+    const defK = 1 - STATE.crystalQuality*0.85;
+    const bright = clamp(cur,0,1.4) * visK * defK;
+    const glowR = 50 + bright*130;
+    const glow = c.createRadialGradient(W*0.5,yTop,4, W*0.5,yTop, glowR);
+    glow.addColorStop(0,`rgba(255,247,214,${0.12+bright*0.5})`);
     glow.addColorStop(1,'rgba(255,247,214,0)');
-    c.fillStyle=glow; c.beginPath(); c.arc(W*0.5,yTop,60+cur*120,0,Math.PI*2); c.fill();
+    c.fillStyle=glow; c.beginPath(); c.arc(W*0.5,yTop,glowR,0,Math.PI*2); c.fill();
 
     // dual current arrows along bottom wire
-    drawDualCurrentArrows(c, 90, yBot+24, W-180, true);
+    c.globalAlpha=dim; drawDualCurrentArrows(c, 90, yBot+24, W-180, !this.burned); c.globalAlpha=1;
+
+    // ---- FEATURE 6: live current gauge + MAX SAFE line ----
+    this.drawCurrentGauge(c);
+    // ---- FEATURE 6: tiny schematic inset ----
+    this.drawSchematic(c, 70, yBot+70);
+    // ---- FEATURE 4: energy meter for the spotlighted electron ----
+    if(this.spotlightOn) this.drawEnergyMeter(c);
 
     // captions
-    label(c, 80, yTop+30, '① enter n-side (high energy)', {color:COLORS.free,size:11});
-    label(c, W-260, yTop+30, '④ back to battery → re-energized', {color:COLORS.free,size:11});
-    label(c, W*0.55, yTop+34, '③ hop hole-to-hole (low energy)', {color:COLORS.valence,size:11});
-    callout(c, 60, yBot+44, 360,
+    const m=material();
+    callout(c, W*0.30, yBot+60, 330,
       'The light\'s energy comes from the BATTERY',
-      `The electron is a courier: the battery loads it with energy, it carries it around the loop, and delivers it as a photon at the junction. More current = more couriers/sec = more photons = brighter. Bigger band gap = bigger drop = bluer photon (now: ${this.colorName()}).`);
-    label(c, W/2, H-20, `Current level: ${(cur*100|0)}%   •   Band gap: ${STATE.bandGap}/100 → ${this.colorName()} photons`, {align:'center', color:COLORS.dim, size:12});
+      `The electron is a courier: the battery loads it, it carries the energy around the loop, and delivers it as a photon at the junction. More current = more photons = brighter. ${m.name}: gap ${m.gapEV} eV → ${m.colorName} light.`);
+
+    // FEATURE 3b/3c failure overlays
+    if(this.burned) drawDestroyed(c, this.burnT, '💨 Smoke — LED burned out');
   },
+
+  /* FEATURE 6: a little zig-zag resistor symbol on the return wire. */
+  drawResistor(c, x, y){
+    const on=STATE.resistorOn, w=70;
+    c.save(); c.lineWidth=3; c.strokeStyle = on? '#c9a86a' : '#5a4a3a';
+    c.beginPath();
+    c.moveTo(x-w/2, y);
+    for(let i=0;i<=6;i++){ const px=x-w/2 + (i/6)*w; const py = y + (i%2?-8:8); i===0?c.lineTo(px,y):c.lineTo(px,py); }
+    c.lineTo(x+w/2, y);
+    c.stroke(); c.restore();
+    label(c, x, y+12, on? `${STATE.resistorVal} Ω resistor` : 'NO resistor (danger!)', {align:'center', size:11, color: on?'#c9a86a':'#df6b6b', weight:'700'});
+  },
+
+  /* FEATURE 6/3b: horizontal current gauge with a red MAX SAFE marker. */
+  drawCurrentGauge(c){
+    const gx=W-250, gy=22, gw=220, gh=44;
+    c.fillStyle='rgba(20,26,38,0.9)'; c.strokeStyle='#33405e'; roundRect(c,gx,gy,gw,gh,8); c.fill(); c.stroke();
+    const full=this.BURN_MA, frac=clamp(this.current/full,0,1);
+    const barX=gx+12, barW=gw-24, barY=gy+24, barH=10;
+    c.fillStyle='#10151f'; roundRect(c,barX,barY,barW,barH,5); c.fill();
+    const over=this.current>this.MAX_SAFE;
+    c.fillStyle= this.burned? '#df3b3b' : over? '#df8b3b' : '#5fbf5f';
+    roundRect(c,barX,barY,barW*frac,barH,5); c.fill();
+    // MAX SAFE marker
+    const safeX=barX+barW*(this.MAX_SAFE/full);
+    c.strokeStyle='#df6b6b'; c.lineWidth=2; c.beginPath(); c.moveTo(safeX,barY-4); c.lineTo(safeX,barY+barH+4); c.stroke();
+    label(c, safeX, gy+gh-12, 'MAX SAFE 20mA', {align:'center', size:9, color:'#df8b8b'});
+    label(c, gx+10, gy+5, `Current: ${this.burned?'∞ (burned)':this.current.toFixed(1)+' mA'}`, {size:12, weight:'700', color: over?'#ffb454':'#bcd0ff'});
+  },
+
+  /* FEATURE 6: schematic inset (battery → resistor → LED → back). */
+  drawSchematic(c, x, y){
+    const w=190, h=78;
+    c.fillStyle='rgba(20,26,38,0.9)'; c.strokeStyle='#33405e'; roundRect(c,x,y,w,h,8); c.fill(); c.stroke();
+    label(c, x+10, y+6, 'Real circuit', {size:11, weight:'700', color:'#bcd0ff'});
+    const lx=x+18, rx=x+w-18, ty=y+34, by=y+62;
+    c.strokeStyle=COLORS.wire; c.lineWidth=2;
+    c.strokeRect(lx, ty, rx-lx, by-ty);
+    // battery (left side)
+    label(c, lx, ty-2, '🔋', {size:13});
+    // resistor (top) zig-zag
+    c.strokeStyle=STATE.resistorOn?'#c9a86a':'#5a4a3a'; c.beginPath();
+    const r0=lx+40, r1=lx+90;
+    c.moveTo(r0,ty); for(let i=0;i<=5;i++){const px=r0+(i/5)*(r1-r0);c.lineTo(px, ty+(i%2?-5:5));} c.lineTo(r1,ty);
+    c.stroke();
+    label(c, (r0+r1)/2, ty-14, STATE.resistorOn?`${STATE.resistorVal}Ω`:'none', {align:'center', size:9, color:STATE.resistorOn?'#c9a86a':'#df6b6b'});
+    // LED (right) triangle
+    c.fillStyle=material().visible?material().color:'#7a1f1f';
+    c.beginPath(); c.moveTo(rx-6,ty-6); c.lineTo(rx-6,ty+6); c.lineTo(rx+6,ty); c.closePath(); c.fill();
+    label(c, rx, ty-14, 'LED', {align:'center', size:9, color:'#cfd'});
+    // conventional current arrow (+ → −) clockwise along the top
+    c.strokeStyle=COLORS.hole; c.fillStyle=COLORS.hole; c.lineWidth=1.5;
+    const ax=lx+18; c.beginPath(); c.moveTo(ax,ty); c.lineTo(ax+10,ty); c.stroke();
+    c.beginPath(); c.moveTo(ax+10,ty); c.lineTo(ax+5,ty-4); c.lineTo(ax+5,ty+4); c.closePath(); c.fill();
+    label(c, x+10, y+h-14, '5V supply • ~2V LED drop • ~9 mA (safe)', {size:9, color:COLORS.dim});
+  },
+
+  /* FEATURE 4: vertical energy meter tracking the spotlighted electron.
+     The DROP at the junction equals the band gap = the photon's energy. */
+  drawEnergyMeter(c){
+    const spot=this.couriers.find(e=>e.spot);
+    const mx=W-46, my=80, mh=H-200, mw=20;
+    // frame
+    c.fillStyle='rgba(20,26,38,0.92)'; c.strokeStyle='#33405e';
+    roundRect(c,mx-mw/2-2,my-2,mw+4,mh+4,5); c.fill(); c.stroke();
+    // band markers: MAX (conduction) at top, LOW (valence) at bottom
+    const gapFrac=material().gapFrac;
+    const lowY = my + mh*gapFrac;     // valence level sits one gap below max
+    // energy level of the spotlight electron
+    let level = 1; // 0..1 from bottom... we map energy: high=top, low=lowY
+    let stageMsg='—';
+    if(spot){
+      if(spot.energy==='high'){ level=1; }
+      else level=0;  // low
+      switch(spot.stageIndex){
+        case 4: stageMsg = spot.recharged? 'battery re-energizes it — loop repeats' : 'returning to battery (empty)'; break;
+        case 0: stageMsg = 'battery loaded it — energy IN'; break;
+        case 1: stageMsg = 'drifting — high energy'; break;
+        case 2: stageMsg = 'low energy — hopping hole-to-hole'; break;
+        case 3: stageMsg = 'low energy — heading to the wire'; break;
+      }
+    }
+    const fillTop = level>0.5 ? my : lowY;
+    const fillBot = my+mh;
+    c.fillStyle = level>0.5 ? COLORS.free : COLORS.valence;
+    c.fillRect(mx-mw/2, fillTop, mw, fillBot-fillTop);
+    // labels for MAX / LOW + the gap = photon energy
+    label(c, mx+16, my-2, 'MAX (conduction)', {size:9, color:COLORS.free});
+    label(c, mx+16, lowY-6, 'LOW (valence)', {size:9, color:COLORS.valence});
+    // the gap span = photon energy
+    c.strokeStyle='rgba(255,247,214,0.6)'; c.setLineDash([3,3]);
+    c.beginPath(); c.moveTo(mx-mw/2-8,my); c.lineTo(mx-mw/2-8,lowY); c.stroke(); c.setLineDash([]);
+    label(c, mx-mw/2-12, (my+lowY)/2-6, `gap = ${material().gapEV} eV = photon`, {size:9, color:'#fff7d6', align:'right'});
+    label(c, mx, my+mh+14, 'ENERGY', {align:'center', size:10, color:COLORS.dim});
+    // current stage caption
+    label(c, W*0.5, H-44, `🔦 Spotlight: ${stageMsg}`, {align:'center', size:12, weight:'600', color:'#fff'});
+    label(c, W*0.5, H-26, 'The photon\'s energy comes from the battery. The electron is a courier: loaded, delivers light, returns empty, reloads.', {align:'center', size:11, color:COLORS.dim});
+  },
+
   drawBattery(c,x,y){
     c.fillStyle='#1c2230'; c.strokeStyle='#5fbf8f'; c.lineWidth=2;
     roundRect(c,x-26,y-22,52,44,6); c.fill(); c.stroke();
     label(c,x,y-12,'🔋',{align:'center',size:16});
-    label(c,x,y+2,'BATTERY',{align:'center',size:9,color:'#8fd0a8'});
+    label(c,x,y+2,'5V',{align:'center',size:10,color:'#8fd0a8'});
     label(c,x-34,y-40,'−',{size:18,color:COLORS.free,weight:'700'});
     label(c,x+24,y-40,'+',{size:18,color:COLORS.hole,weight:'700'});
   },
@@ -1169,6 +1372,13 @@ SCENES.push({
   what: 'A MOSFET: a silicon channel between Source and Drain, with a Gate electrode above it separated by a thin insulator. Toggle the gate voltage.',
   why: 'Gate ON: the gate\'s field pulls electrons into the channel → it conducts → a "1". Gate OFF: electrons drain away → channel empty → insulates → a "0". Billions of these switching on/off is how chips compute.',
   controls: ['gate', 'transport'],
+  // FEATURE 2: gate ON pulls electrons into the channel (a road + movers);
+  // gate OFF empties the channel so there is nothing to carry current.
+  conduction(){
+    return STATE.gateOn
+      ? { road:true, roadWhy:'channel populated', band:true, bandWhy:'gate pulled electrons in' }
+      : { road:false, roadWhy:'channel empty — no path', band:false, bandWhy:'no carriers in channel' };
+  },
   setup(){ this.channel=[]; this.t=0; this.flow=[]; },
   update(dt){
     this.t+=dt;
@@ -1234,6 +1444,108 @@ SCENES.push({
     callout(c, 60, H-96, 420,
       'This is how chips make 1s and 0s',
       'A small voltage on the gate switches the channel between conducting (1) and insulating (0) — no moving parts. Billions of these transistors switch on and off to compute everything your computer does.');
+  },
+});
+
+
+/* ---------------------------------------------------------------------
+   FEATURE 7 — SCENE 9 — MAKING WHITE LIGHT (sandbox)
+   ---------------------------------------------------------------------
+   Two ways to build white light:
+     A) RGB additive mixing — red + green + blue emitters overlap; balanced
+        intensities read white in the overlap (uses 'lighter' compositing).
+     B) Blue LED + yellow phosphor — a blue LED whose photons partly strike
+        a phosphor that re-emits a broad spectrum → the sum looks white.
+   No conduction() (panel hidden): this scene is about light, not current.
+   --------------------------------------------------------------------- */
+SCENES.push({
+  title: '9. Making White Light',
+  sub: 'Why blue was the missing piece — two ways to make white.',
+  what: 'A sandbox for making <strong>white light</strong>. <em>Method A:</em> mix red, green and blue emitters additively. <em>Method B:</em> coat a single blue LED with yellow <span class="term" data-t="phosphor">phosphor</span>.',
+  why: 'White isn\'t one color — it\'s a balanced mix. Red + Green + Blue light add to white, so blue was the LAST piece needed to unlock all lighting. Alternatively a blue LED + yellow phosphor makes white — and that\'s how most white LED bulbs work.',
+  controls: ['whiteLight'],
+  // sandbox state lives on the scene object
+  method: 'rgb',
+  r: 1, g: 1, b: 1, rOn: true, gOn: true, bOn: true, phosphor: true,
+  setup(){ this.t = 0; this.photons = []; this.spawn = 0; },
+  update(dt){
+    this.t += dt;
+    if(this.method === 'phosphor'){
+      // emit blue photons from the LED; some convert at the phosphor
+      this.spawn += dt;
+      if(this.spawn > 0.06){ this.spawn = 0;
+        this.photons.push({ x: W*0.32, y: H/2 + rand(-30,30), vx: rand(150,210), vy: rand(-30,30), life: 2.4, converted: false });
+      }
+      const phX = W*0.5;
+      this.photons.forEach(p=>{
+        p.x += p.vx*dt; p.y += p.vy*dt; p.life -= dt;
+        // convert at the phosphor layer (if enabled)
+        if(this.phosphor && !p.converted && p.x >= phX){ p.converted = true; p.vy += rand(-40,40); }
+      });
+      this.photons = this.photons.filter(p=>p.life>0 && p.x < W-40);
+    }
+  },
+  draw(c){
+    label(c, W/2, 18, this.method==='rgb' ? 'Method A — RGB additive mixing' : 'Method B — blue LED + yellow phosphor',
+      {align:'center', size:16, weight:'700', color:'#fff'});
+    if(this.method==='rgb') this.drawRGB(c); else this.drawPhosphor(c);
+  },
+  // ---- Method A ----
+  drawRGB(c){
+    const cy = H*0.46, R = Math.min(W,H)*0.26;
+    // three emitter centers arranged in a triangle
+    const pts = [
+      { k:'r', col:[255,90,90],  x: W*0.5,        y: cy-R*0.5,  name:'RED'   },
+      { k:'g', col:[90,255,120], x: W*0.5-R*0.62, y: cy+R*0.55, name:'GREEN' },
+      { k:'b', col:[90,123,255], x: W*0.5+R*0.62, y: cy+R*0.55, name:'BLUE'  },
+    ];
+    c.save();
+    c.globalCompositeOperation = 'lighter'; // ADDITIVE blending
+    pts.forEach(p=>{
+      if(!this[p.k+'On']) return;
+      const a = this[p.k] * 0.9;
+      const g = c.createRadialGradient(p.x,p.y,4, p.x,p.y,R);
+      g.addColorStop(0,`rgba(${p.col[0]},${p.col[1]},${p.col[2]},${a})`);
+      g.addColorStop(1,`rgba(${p.col[0]},${p.col[1]},${p.col[2]},0)`);
+      c.fillStyle=g; c.beginPath(); c.arc(p.x,p.y,R,0,Math.PI*2); c.fill();
+    });
+    c.restore();
+    // labels
+    pts.forEach(p=> label(c, p.x, p.y - R - 14, `${p.name} ${this[p.k+'On']?(this[p.k]*100|0)+'%':'off'}`, {align:'center', size:11, color:`rgb(${p.col[0]},${p.col[1]},${p.col[2]})`, weight:'700'}));
+    const allOn = this.rOn&&this.gOn&&this.bOn;
+    const balanced = allOn && Math.abs(this.r-this.g)<0.15 && Math.abs(this.g-this.b)<0.15 && this.r>0.6;
+    label(c, W/2, cy+2, balanced?'WHITE':'', {align:'center', size:18, weight:'800', color:'#0a0d12'});
+    callout(c, 30, H-104, 380,
+      'Red + Green + Blue → White',
+      `Light adds, it doesn't subtract: overlapping R, G and B makes white. ${balanced?'Balanced now → the center reads WHITE.':'Turn all three ON near equal intensity to get white.'} Blue was the missing piece — that's why it unlocked all lighting.`);
+  },
+  // ---- Method B ----
+  drawPhosphor(c){
+    const cy=H/2;
+    // blue LED on the left
+    label(c, W*0.32, cy-60, 'blue LED', {align:'center', size:12, color:'#5a7bff', weight:'700'});
+    c.fillStyle='#5a7bff'; c.beginPath(); c.arc(W*0.32, cy, 16, 0, Math.PI*2); c.fill();
+    // phosphor layer
+    if(this.phosphor){
+      c.fillStyle='rgba(255,210,90,0.30)'; c.fillRect(W*0.5-10, cy-150, 20, 300);
+      c.strokeStyle='rgba(255,210,90,0.8)'; c.strokeRect(W*0.5-10, cy-150, 20, 300);
+      label(c, W*0.5, cy-165, 'yellow phosphor', {align:'center', size:11, color:'#ffd25a', weight:'700'});
+    }
+    // photons: blue before the phosphor, broadened/white after
+    this.photons.forEach(p=>{
+      const col = p.converted ? '#fff7e6' : '#7a9cff';
+      drawPhoton(c, p.x, p.y, p.converted?1.2:0.9, col);
+    });
+    // output glow on the right
+    const white = this.phosphor;
+    const g=c.createRadialGradient(W*0.78,cy,6,W*0.78,cy,150);
+    const oc = white ? '255,250,235' : '120,150,255';
+    g.addColorStop(0,`rgba(${oc},0.5)`); g.addColorStop(1,`rgba(${oc},0)`);
+    c.fillStyle=g; c.beginPath(); c.arc(W*0.78,cy,150,0,Math.PI*2); c.fill();
+    label(c, W*0.78, cy, white?'WHITE':'BLUE', {align:'center', size:18, weight:'800', color: white?'#0a0d12':'#dbe6ff'});
+    callout(c, 30, H-104, 400,
+      'Blue LED + yellow phosphor = white',
+      `${white?'Some blue photons pass straight through; the rest hit the phosphor and re-emit a broad (yellowish) spectrum. Blue + yellow ≈ white.':'With no phosphor the output is pure blue. Turn the phosphor ON to make white.'} This is how most white LED bulbs work.`);
   },
 });
 
@@ -1319,6 +1631,7 @@ const PREDICT = {
     this.queue = specs.slice();
     this.active = true;
     STATE.predictFreeze = true;             // pause the animation
+    document.body.classList.add('predicting'); // block the controls until done
     this._next();
   },
 
@@ -1383,6 +1696,7 @@ const PREDICT = {
   _finish() {
     this.active = false; this.spec = null;
     STATE.predictFreeze = false;
+    document.body.classList.remove('predicting');
     this.overlay().classList.add('hidden');
     this.overlay().classList.remove('revealed');
   },
@@ -1580,6 +1894,9 @@ function buildControls(scene) {
       addSlider('Crystal quality', 0, 100, (1 - STATE.crystalQuality) * 100, 1,
         v => { STATE.crystalQuality = clamp(1 - v / 100, 0, 1); },
         v => v >= 95 ? 'Perfect' : v <= 5 ? 'Very defective' : `${v|0}% perfect`);
+    } else if (key === 'whiteLight') {
+      // FEATURE 7: white-light sandbox controls (depend on the chosen method)
+      addWhiteLightControls(scene);
     } else if (key === 'spotlight') {
       // FEATURE 4: spotlight-one-electron + step button
       addSpotlightControls();
@@ -1665,6 +1982,41 @@ function addResistorControls() {
     logEvent(`🧰 Resistor ${STATE.resistorOn ? 'ON — current limited (safe).' : 'OFF — no current limit (danger!).'}`);
   };
   controlsEl.appendChild(wrap);
+}
+
+/* FEATURE 7 — white-light sandbox controls. Two methods; the control set
+   rebuilds when the method toggles. */
+function addWhiteLightControls(scene) {
+  const methodBtn = addButton(
+    scene.method === 'rgb' ? 'Method: RGB mixing' : 'Method: Blue + phosphor',
+    'btn primary', () => {
+      scene.method = scene.method === 'rgb' ? 'phosphor' : 'rgb';
+      buildControls(scene); // rebuild to show the right widgets
+      logEvent(`💡 White-light method → ${scene.method === 'rgb' ? 'RGB additive mixing' : 'blue LED + yellow phosphor'}.`);
+    });
+  methodBtn.title = 'Switch between the two ways to make white light';
+
+  if (scene.method === 'rgb') {
+    // three emitters: toggle + intensity each
+    [['r', 'Red', '#ff5a5a'], ['g', 'Green', '#5aff7a'], ['b', 'Blue', '#5a7bff']].forEach(([k, name, col]) => {
+      const onBtn = addButton(`${name}: ${scene[k + 'On'] ? 'ON' : 'OFF'}`,
+        'btn toggle ' + (scene[k + 'On'] ? 'on' : 'off'), () => {
+          scene[k + 'On'] = !scene[k + 'On'];
+          onBtn.textContent = `${name}: ${scene[k + 'On'] ? 'ON' : 'OFF'}`;
+          onBtn.className = 'btn toggle ' + (scene[k + 'On'] ? 'on' : 'off');
+        });
+      addSlider(`${name} intensity`, 0, 100, scene[k] * 100, 1,
+        v => { scene[k] = v / 100; }, v => `${v | 0}%`);
+    });
+  } else {
+    const ph = addButton(scene.phosphor ? 'Phosphor coating: ON' : 'Phosphor coating: OFF',
+      'btn toggle ' + (scene.phosphor ? 'on' : 'off'), () => {
+        scene.phosphor = !scene.phosphor;
+        ph.textContent = scene.phosphor ? 'Phosphor coating: ON' : 'Phosphor coating: OFF';
+        ph.className = 'btn toggle ' + (scene.phosphor ? 'on' : 'off');
+        logEvent(`🟡 Yellow phosphor ${scene.phosphor ? 'ON → blue + yellow = white.' : 'OFF → pure blue.'}`);
+      });
+  }
 }
 
 /* FEATURE 4 — spotlight toggle + per-stage Step button. */

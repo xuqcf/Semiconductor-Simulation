@@ -52,6 +52,15 @@ h1, h2, h3 { margin: 0; font-weight: 600; }
 
 .switch { display: flex; align-items: center; gap: 8px; cursor: pointer; color: var(--text-dim); }
 .switch input { accent-color: var(--accent); width: 16px; height: 16px; }
+.title-right { display: flex; align-items: center; gap: 18px; }
+
+/* FEATURE 1: session scoreboard chip in the top bar */
+.scoreboard {
+  font-size: 12px; font-weight: 600;
+  padding: 4px 10px; border-radius: 999px;
+  background: #1a2740; border: 1px solid var(--accent); color: #bcd0ff;
+  white-space: nowrap;
+}
 
 /* =================================================================
    TABS
@@ -112,6 +121,83 @@ h1, h2, h3 { margin: 0; font-weight: 600; }
 }
 #canvas { display: block; width: 100%; height: 540px; }
 
+.hidden { display: none !important; }
+
+/* =================================================================
+   FEATURE 2 — "Can it conduct?" live panel (corner of the stage)
+   ================================================================= */
+.cond-panel {
+  position: absolute; top: 12px; left: 12px; z-index: 6;
+  width: 232px;
+  background: rgba(13, 18, 28, 0.92);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 10px 12px;
+  backdrop-filter: blur(2px);
+}
+.cond-panel h4 {
+  margin: 0 0 8px; font-size: 12px; text-transform: uppercase;
+  letter-spacing: .04em; color: var(--text-dim); font-weight: 700;
+}
+.cond-row { display: grid; grid-template-columns: 18px 1fr; column-gap: 8px; align-items: start; margin-bottom: 7px; }
+.cond-mark { font-weight: 800; text-align: center; }
+.cond-mark.yes { color: #5fbf5f; }
+.cond-mark.no  { color: #df6b6b; }
+.cond-k { font-size: 12px; color: var(--text); line-height: 1.25; }
+.cond-k em { color: var(--text-dim); font-style: normal; font-size: 11px; }
+.cond-why { grid-column: 2; font-size: 11px; color: var(--text-dim); }
+.cond-result {
+  margin-top: 8px; padding: 6px; border-radius: 6px; text-align: center;
+  font-weight: 800; font-size: 15px; letter-spacing: .03em;
+}
+.cond-result.conducts { background: #16331a; color: #7bdf7b; border: 1px solid #2f6b34; }
+.cond-result.no       { background: #2a1717; color: #df8b8b; border: 1px solid #5a2a2a; }
+.cond-result .weak { display:block; font-size: 10px; font-weight: 600; color: #cdaa5f; letter-spacing: 0; }
+
+/* =================================================================
+   FEATURE 1 — Predict-then-reveal overlay
+   ================================================================= */
+.predict-overlay {
+  position: absolute; inset: 0; z-index: 20;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(6, 9, 15, 0.74);
+}
+/* After the user has chosen, the backdrop fades so the animation shows */
+.predict-overlay.revealed { background: rgba(6, 9, 15, 0.30); align-items: flex-start; }
+.predict-card {
+  width: min(440px, 86%);
+  background: var(--bg-panel);
+  border: 1px solid var(--accent);
+  border-radius: 12px;
+  padding: 20px;
+  box-shadow: 0 16px 50px rgba(0,0,0,.55);
+}
+.predict-overlay.revealed .predict-card { margin-top: 16px; width: min(560px, 92%); }
+.predict-tag {
+  display: inline-block; font-size: 11px; font-weight: 700; letter-spacing: .05em;
+  text-transform: uppercase; color: var(--accent); margin-bottom: 8px;
+}
+.predict-q { font-size: 16px; font-weight: 600; margin-bottom: 14px; line-height: 1.4; }
+.predict-opts { display: flex; flex-direction: column; gap: 8px; }
+.predict-opt {
+  padding: 11px 14px; border: 1px solid var(--border); border-radius: 8px;
+  background: #1c2230; color: var(--text); cursor: pointer; font-family: inherit;
+  font-size: 14px; text-align: left; transition: background .12s, border-color .12s;
+}
+.predict-opt:hover { background: #252d3d; border-color: var(--accent); }
+.predict-opt.chosen { border-color: var(--accent); background: #243352; }
+.predict-opt.correct { border-color: #5fbf5f; background: #16331a; }
+.predict-opt.wrong   { border-color: #bf5f5f; background: #2a1717; }
+.predict-opt:disabled { cursor: default; opacity: .9; }
+.predict-banner {
+  margin-bottom: 10px; padding: 10px 12px; border-radius: 8px;
+  font-size: 15px; font-weight: 700;
+}
+.predict-banner.ok  { background: #16331a; color: #8be38b; border: 1px solid #2f6b34; }
+.predict-banner.bad { background: #2a1717; color: #e39b9b; border: 1px solid #5a2a2a; }
+.predict-expl { font-size: 13px; color: var(--text); margin-bottom: 14px; line-height: 1.5; }
+.predict-actions { display: flex; gap: 8px; }
+
 /* =================================================================
    CONTROLS
    ================================================================= */
@@ -136,6 +222,12 @@ h1, h2, h3 { margin: 0; font-weight: 600; }
 .control label { font-size: 12px; color: var(--text-dim); }
 .control .value { color: var(--text); font-weight: 600; }
 .control input[type=range] { width: 170px; accent-color: var(--accent); }
+.mat-select {
+  margin-top: 2px; padding: 6px 8px; border-radius: 6px;
+  background: #1c2230; color: var(--text); border: 1px solid var(--border);
+  font-family: inherit; font-size: 13px; cursor: pointer;
+}
+.mat-select:hover { border-color: var(--accent); }
 
 .btn {
   padding: 8px 14px;

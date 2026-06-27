@@ -19,6 +19,12 @@
       <span class="subtitle">From a single atom → to an LED → to a transistor</span>
     </div>
     <div class="title-right">
+      <!-- FEATURE 1: Predict-first global toggle + session scoreboard -->
+      <span id="scoreboard" class="scoreboard" title="Resets on page reload">Predictions: 0/0 correct</span>
+      <label class="switch">
+        <input type="checkbox" id="predictFirst" checked />
+        <span>Predict-first mode</span>
+      </label>
       <label class="switch">
         <input type="checkbox" id="reducedMotion" />
         <span>Reduced motion (slow)</span>
@@ -44,6 +50,27 @@
       <!-- Canvas the simulation draws into -->
       <div id="canvasWrap">
         <canvas id="canvas"></canvas>
+
+        <!-- FEATURE 2: Live "Can it conduct?" panel (filled by JS per scene) -->
+        <div id="conductionPanel" class="cond-panel hidden">
+          <h4>Can it conduct?</h4>
+          <div class="cond-row">
+            <span class="cond-mark" id="condRoadMark">—</span>
+            <span class="cond-k">Road <em>(connected path)</em></span>
+            <span class="cond-why" id="condRoadWhy"></span>
+          </div>
+          <div class="cond-row">
+            <span class="cond-mark" id="condBandMark">—</span>
+            <span class="cond-k">Partly-full band <em>(movers + room)</em></span>
+            <span class="cond-why" id="condBandWhy"></span>
+          </div>
+          <div class="cond-result" id="condResult">—</div>
+        </div>
+
+        <!-- FEATURE 1: Predict-then-reveal overlay (built dynamically by JS) -->
+        <div id="predictOverlay" class="predict-overlay hidden">
+          <div class="predict-card" id="predictCard"></div>
+        </div>
       </div>
 
       <!-- Per-scene controls injected here -->

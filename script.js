@@ -59,6 +59,13 @@ const GLOSSARY = {
   'photon': 'A particle of light. Its energy equals the band-gap energy the electron lost.',
   'drift': 'Slow, directional movement of carriers caused by an electric field (on top of random jitter).',
   'conventional current': 'The historical convention: current flows + → −. Electrons actually move the OPPOSITE way (− → +).',
+  // --- terms introduced by the new features ---
+  'breakdown voltage': 'The reverse voltage at which the depletion wall fails and carriers are ripped across, destroying an ordinary diode.',
+  'current-limiting resistor': 'A resistor in series with an LED that fixes the current at a safe value: I = (V_supply − V_LED) / R.',
+  'crystal defect': 'An imperfection in the lattice that traps an electron and releases its energy as HEAT instead of a photon.',
+  'phosphor': 'A coating that absorbs high-energy (blue) photons and re-emits a broad spread of lower-energy light, making white.',
+  'III–V compound': 'A crystal of a group-III atom (3 valence e⁻) alternating with a group-V atom (5 valence e⁻); they average to 4, mimicking silicon.',
+  'band gap (eV)': 'The energy an electron must drop to recombine. A bigger gap = a higher-energy (bluer) photon.',
 };
 
 
@@ -66,15 +73,51 @@ const GLOSSARY = {
    3. STATE  – shared, mutated by controls, read by scenes.
    ===================================================================== */
 const STATE = {
-  voltage: 0,        // −5 .. +5  (slider)
+  voltage: 0,        // −5 .. +5  (slider)  (diode reverse range extended to −12)
   polarity: 1,       // +1 normal, −1 flipped (polarity button)
   temperature: 30,   // 0 .. 100  (thermal generation)
-  bandGap: 50,       // 0 .. 100  (LED photon color)
+  bandGap: 50,       // 0 .. 100  (LED photon color — driven by material)
   gateOn: false,     // transistor gate
   paused: false,
   stepRequested: false,
   reducedMotion: false,
+
+  // --- FEATURE 1: predict-then-reveal (session only, NOT persisted) ---
+  predictFirst: true,
+  predictFreeze: false, // when a prediction card is up, freeze the sim
+
+  // --- FEATURE 5/6: material + real-circuit additions (LED scene) ---
+  material: 'GaAs',     // 'Si' | 'GaAs' | 'GaN' (key into MATERIALS)
+  resistorOn: true,     // FEATURE 3b/6: series current-limiting resistor
+  resistorVal: 330,     // ohms (0..1000)
+  crystalQuality: 0,    // FEATURE 3c: 0 = perfect ... 1 = fully defective
 };
+
+// Effective forward voltage taking the polarity flip into account.
+// (declared up here because reduced-motion speed() is referenced widely)
+
+/* =====================================================================
+   FEATURE 5 — MATERIAL FAMILY
+   Each semiconductor maps a band-gap energy (eV) to a photon color and a
+   lattice style. Si is a single-element (group IV) lattice; GaAs and GaN
+   are III–V compounds drawn as an alternating two-atom checkerboard.
+   gapFrac drives how TALL the forbidden gap is drawn in band diagrams.
+   ===================================================================== */
+const MATERIALS = {
+  Si:   { name: 'Silicon (Si)',          gapEV: 1.1, color: '#7a1f1f',
+          visible: false, colorName: 'infrared (INVISIBLE)',
+          note: 'INVISIBLE (infrared) — this is your TV remote.',
+          lattice: 'single', a: 'Si', b: 'Si', aVal: 4, bVal: 4, gapFrac: 0.18 },
+  GaAs: { name: 'Gallium arsenide (GaAs)', gapEV: 1.4, color: '#ff5a5a',
+          visible: true, colorName: 'red',
+          note: 'III–V compound — classic red LED.',
+          lattice: 'compound', a: 'Ga', b: 'As', aVal: 3, bVal: 5, gapFrac: 0.30 },
+  GaN:  { name: 'Gallium nitride (GaN)',  gapEV: 3.4, color: '#5a7bff',
+          visible: true, colorName: 'blue',
+          note: 'III–V compound — the breakthrough blue LED.',
+          lattice: 'compound', a: 'Ga', b: 'N', aVal: 3, bVal: 5, gapFrac: 0.52 },
+};
+function material() { return MATERIALS[STATE.material]; }
 
 // Global speed multiplier. Reduced motion slows EVERYTHING for study.
 function speed() { return STATE.reducedMotion ? 0.25 : 1; }
@@ -227,14 +270,17 @@ function loop(now) {
   lastT = now;
 
   // Pause freezes updates but we still redraw (so labels stay visible).
+  // A pending prediction card (FEATURE 1) also freezes the animation so the
+  // user commits BEFORE seeing the determinate outcome.
   const stepping = STATE.paused && STATE.stepRequested;
-  const doUpdate = !STATE.paused || stepping;
+  const doUpdate = (!STATE.paused && !STATE.predictFreeze) || stepping;
 
   ctx.clearRect(0, 0, W, H);
   if (activeScene) {
     if (doUpdate && activeScene.update) activeScene.update(dt * speed() * (stepping ? 1 : 1));
     if (activeScene.draw) activeScene.draw(ctx);
   }
+  updateConductionPanel(); // FEATURE 2: keep the "Can it conduct?" panel live
   STATE.stepRequested = false; // consume the single step
   requestAnimationFrame(loop);
 }
@@ -267,8 +313,11 @@ function logEvent(text, isEvent = true) {
 function drawBandBackdrop(c, x, w, opts = {}) {
   const top = opts.top ?? 40;
   const bottom = opts.bottom ?? H - 40;
-  const cbH = (bottom - top) * 0.33;      // conduction band height
-  const vbTop = top + (bottom - top) * 0.62;
+  // FEATURE 5: the forbidden-gap height can resize with the material.
+  const span = bottom - top;
+  const cbH = span * 0.30;                       // conduction band height
+  const gapH = span * (opts.gapFrac ?? 0.29);    // forbidden gap height
+  const vbTop = top + cbH + gapH;
   const cb = { x, y: top, w, h: cbH };
   const gap = { x, y: top + cbH, w, h: vbTop - (top + cbH) };
   const vb = { x, y: vbTop, w, h: bottom - vbTop };
@@ -314,6 +363,8 @@ SCENES.push({
   what: 'A single <span class="term" data-t="electron">silicon</span> atom. Its nucleus holds 14 protons (+14). Around it, 14 electrons sit in shells holding 2, 8, and 4 electrons. The outermost 4 are highlighted in teal.',
   why: 'Only the outer-shell <span class="term" data-t="valence electron">valence electrons</span> interact with other atoms. Silicon has 4 valence electrons but a full shell "wants" 8 — so each Si atom shares electrons with neighbors to reach 8. That sharing is what builds a crystal.',
   controls: [],
+  // FEATURE 2: a lone atom has room (empty slots) but no path between atoms.
+  conduction() { return { road: false, roadWhy: 'single atom — no path', band: true, bandWhy: 'has empty slots' }; },
   setup() { this.t = 0; },
   update(dt) { this.t += dt; },
   draw(c) {
@@ -369,6 +420,8 @@ SCENES.push({
   what: 'A 2-D grid of silicon atoms. Each <span class="term" data-t="covalent bond">covalent bond</span> is a shared pair of teal electrons between two neighbors. Hover an atom to highlight its 4 bonds.',
   why: 'Every valence electron is now locked inside a bond — none are free to roam. With no free carriers, pure (intrinsic) silicon is a <strong>poor conductor</strong>. We need heat or doping to free electrons.',
   controls: [],
+  // FEATURE 2: bonded lattice IS a road, but the valence band is full (no movers).
+  conduction() { return { road: true, roadWhy: 'bonded lattice', band: false, bandWhy: 'valence band full' }; },
   setup() {
     this.cols = 4; this.rows = 4; this.hover = -1;
     this.recalc();
@@ -456,10 +509,23 @@ SCENES.push({
   sub: 'Heat kicks electrons across the band gap, making electron–hole pairs.',
   what: 'A band diagram. The <span class="term" data-t="valence band">valence band</span> (bottom) starts full of teal electrons; the <span class="term" data-t="conduction band">conduction band</span> (top) is empty. Between them is the <span class="term" data-t="band gap">band gap</span>.',
   why: 'Raise the temperature: thermal energy occasionally kicks one electron straight UP across the gap (an instant jump — it never rests inside the gap) into the conduction band, leaving a <span class="term" data-t="hole">hole</span> behind. That electron–hole pair is intrinsic conduction. The gap is in ENERGY, not physical space.',
-  controls: ['temperature', 'transport'],
+  controls: ['temperature', 'material', 'transport'],
+  // FEATURE 2: a pure crystal IS a road; whether the (upper) band has movers
+  // depends on temperature — cold = full valence band, hot = freed carriers.
+  conduction() {
+    const hot = this.cond && this.cond.length > 0;
+    return {
+      road: true, roadWhy: 'bonded lattice',
+      band: hot, bandWhy: hot ? 'heat freed some carriers' : 'valence band full',
+      weak: true,
+    };
+  },
+  gapFrac() { return material().gapFrac; },
   setup() {
     const x = 90, w = W - 180;
-    this.region = drawBandBackdrop(ctx, x, w, {}); // also gives geometry
+    this.region = computeBands(this.gapFrac());
+    this._mat = STATE.material;
+    this._prevTemp = STATE.temperature;
     // populate valence band fully (a packed grid of electrons)
     this.valence = []; this.cond = []; this.holes = []; this.photons = [];
     const vb = this.region.vb;
@@ -471,8 +537,23 @@ SCENES.push({
     this.timer = 0;
   },
   update(dt) {
+    // material change resizes the gap → rebuild the diagram
+    if (this._mat !== STATE.material) { this.setup(); }
     // geometry can change on resize; recompute band rects cheaply
-    this.region = computeBands();
+    this.region = computeBands(this.gapFrac());
+
+    // FEATURE 1: predict-first when temperature first rises past a threshold.
+    if (STATE.temperature > 50 && this._prevTemp <= 50 && PREDICT.once('temp-pure')) {
+      PREDICT.ask({
+        tag: 'Pure semiconductor + heat',
+        question: 'As temperature rises in a PURE semiconductor, conductivity will…?',
+        options: ['Go UP', 'Go DOWN', 'Stay the same'],
+        correct: 0,
+        explain: 'Heat frees more electron-hole pairs → more carriers → more conduction. (This is the opposite of a metal, where heating reduces conductivity.)',
+      });
+    }
+    this._prevTemp = STATE.temperature;
+
     this.timer += dt;
     // thermal generation rate scales with temperature
     const rate = (STATE.temperature / 100) * 1.4; // pairs per second-ish
@@ -511,7 +592,7 @@ SCENES.push({
     this.photons = this.photons.filter(p => p.life > 0);
   },
   draw(c) {
-    const reg = drawBandBackdrop(c, 90, W - 180, {});
+    const reg = drawBandBackdrop(c, 90, W - 180, { gapFrac: this.gapFrac() });
     this.region = reg;
     // valence electrons (packed — full band can't conduct)
     this.valence.forEach(v => { if (v.filled) drawValenceElectron(c, v.x, v.y, 7); else drawHole(c, v.x, v.y, 7); });
@@ -526,10 +607,11 @@ SCENES.push({
     c.stroke(); c.restore();
     label(c, reg.vb.x + 48, reg.gap.y + reg.gap.h/2 - 8, 'instant jump across the gap →', { color: COLORS.free, size: 11 });
 
-    label(c, 90, H - 28, `Temperature ${STATE.temperature}/100 — free electrons: ${this.cond.length}, holes: ${this.holes.filter(h=>h.life>0).length}`, { color: COLORS.dim, size: 12 });
+    const m = material();
+    label(c, 90, H - 28, `${m.name} — gap ${m.gapEV} eV • Temp ${STATE.temperature}/100 — free electrons: ${this.cond.length}, holes: ${this.holes.filter(h=>h.life>0).length}`, { color: COLORS.dim, size: 12 });
     callout(c, W - 330, 8, 310,
       'The gap is in ENERGY, not space',
-      'No electron can exist between the bands. Crossing it requires a fixed jump of energy (the gap). At higher temperature, more pairs are made — intrinsic conduction rises.');
+      `No electron can exist between the bands. Crossing it costs a fixed jump of energy (the gap = ${m.gapEV} eV here). A bigger gap is harder to cross. At higher temperature, more pairs are made — intrinsic conduction rises.`);
   },
 });
 
@@ -542,7 +624,10 @@ SCENES.push({
   sub: 'Swap one atom to inject a free electron (n) or a hole (p).',
   what: 'Left: <span class="term" data-t="n-type">n-type</span> silicon with one Si replaced by phosphorus (P, 5 valence electrons). Right: <span class="term" data-t="p-type">p-type</span> with one Si replaced by boron (B, 3 valence electrons).',
   why: 'P has 5 valence electrons: 4 form bonds, the 5th has no bond to join → it roams free (a <span class="term" data-t="majority carrier">majority carrier</span>). B has only 3: one bond can\'t form → a hole, which moves as neighboring electrons hop into it. The lattice stays at 8 per atom — the rule is never broken.',
-  controls: ['transport'],
+  controls: ['dopant', 'transport'],
+  // FEATURE 2: doping adds mobile carriers (free electrons in n, holes in p)
+  // to an already-bonded lattice → both sides conduct.
+  conduction() { return { road: true, roadWhy: 'bonded lattice', band: true, bandWhy: 'free electrons added' }; },
   setup() {
     this.t = 0;
     this.buildLattice();
@@ -651,6 +736,9 @@ SCENES.push({
   what: 'p-type (left, full of holes) joined to n-type (right, full of free electrons). At the boundary, electrons and holes meet and <span class="term" data-t="recombination">recombine</span>, leaving a carrier-free <span class="term" data-t="depletion region">depletion region</span>.',
   why: 'Cancellation is LOCAL — only carriers near the seam recombine. Once a thin insulating wall forms, it blocks further crossing, so both bulk sides stay full. If everything cancelled, it would just be dead silicon.',
   controls: ['transport'],
+  // FEATURE 2: bulk sides have carriers, but the junction itself is a
+  // carrier-free wall → no current crosses with no voltage applied.
+  conduction() { return { road: true, roadWhy: 'lattice connected', band: false, bandWhy: 'depletion region — no carriers' }; },
   setup() {
     this.holes = []; this.electrons = []; this.t = 0; this.depletion = 30;
     this.build();
@@ -713,9 +801,22 @@ SCENES.push({
   title: '6. The Diode (one-way valve)',
   sub: 'Voltage direction decides: conductor or insulator.',
   what: 'The same p-n junction, now wired to a battery. Use the voltage slider and the flip button. Field arrows show the push on carriers; the depletion wall and the current respond.',
-  why: '<span class="term" data-t="forward bias">Forward bias</span> (+ to p) pushes carriers toward the junction → wall shrinks → current flows. <span class="term" data-t="reverse bias">Reverse bias</span> (+ to n) pulls them apart → wall widens → no current. Direction alone flips conductor ↔ insulator.',
-  controls: ['voltage', 'polarity', 'transport'],
-  setup() { this.t=0; this.flow=[]; this.build(); this.ivTrace=[]; },
+  why: '<span class="term" data-t="forward bias">Forward bias</span> (+ to p) pushes carriers toward the junction → wall shrinks → current flows. <span class="term" data-t="reverse bias">Reverse bias</span> (+ to n) pulls them apart → wall widens → no current. Direction alone flips conductor ↔ insulator. Past the <span class="term" data-t="breakdown voltage">breakdown voltage</span> in reverse, the junction is destroyed.',
+  controls: ['voltage', 'polarity', 'reset', 'transport'],
+  breakdownV: -10,   // FEATURE 3a: reverse breakdown threshold (volts)
+  setup() {
+    this.t=0; this.flow=[]; this.build(); this.ivTrace=[];
+    this.destroyed=false; this.burst=[]; this.destroyT=0; this._prevBias=0;
+  },
+  resetDevice() { this.setup(); },
+  // FEATURE 2: forward = wall shrinks & carriers cross; reverse = wall widens.
+  conduction() {
+    if (this.destroyed) return { road: false, roadWhy: 'junction destroyed', band: false, bandWhy: 'no working device' };
+    const v = effVoltage();
+    if (v > 0.2) return { road: true, roadWhy: 'junction connected', band: true, bandWhy: 'wall shrunk, carriers cross' };
+    if (v < -0.2) return { road: true, roadWhy: 'junction connected', band: false, bandWhy: 'wall widened, no carriers cross' };
+    return { road: true, roadWhy: 'junction connected', band: false, bandWhy: 'equilibrium wall blocks' };
+  },
   build(){
     const mid=W/2; this.holes=[]; this.electrons=[];
     for(let i=0;i<60;i++) this.holes.push({x:rand(40,mid-20),y:rand(70,H-160),vy:rand(-6,6)});
@@ -727,6 +828,51 @@ SCENES.push({
     const v = effVoltage();              // + = forward, − = reverse
     const forward = v > 0.2;
     const reverse = v < -0.2;
+
+    // ---- FEATURE 3a: REVERSE BREAKDOWN -------------------------------
+    // Once destroyed, freeze in the smoking state until Reset.
+    if(this.destroyed){
+      this.destroyT += dt;
+      this.burst.forEach(b=>{ b.x+=b.vx*dt; b.y+=b.vy*dt; b.life-=dt; });
+      this.burst = this.burst.filter(b=>b.life>0);
+      return;
+    }
+    if(reverse && v <= this.breakdownV){
+      this.destroyed = true; this.destroyT = 0;
+      // a sudden surge of carriers smashing across the junction
+      for(let i=0;i<40;i++) this.burst.push({ x:W/2, y:rand(70,H-160), vx:rand(-260,260), vy:rand(-120,120), life:0.8 });
+      logEvent(`💥 Reverse voltage hit ${this.breakdownV} V → breakdown! Carriers ripped across → diode DESTROYED.`);
+    }
+
+    // ---- FEATURE 1: predict-first when bias direction changes --------
+    const biasSign = forward ? 1 : reverse ? -1 : 0;
+    if(biasSign !== 0 && biasSign !== this._prevBias && this._prevBias !== undefined){
+      const fwd = biasSign === 1;
+      PREDICT.askSequence([
+        {
+          tag: 'Diode bias',
+          question: fwd
+            ? 'With the + terminal on the p-side, will the diode conduct or block?'
+            : 'With the + terminal on the n-side (reverse), will the diode conduct or block?',
+          options: ['Conduct (ON)', 'Block (OFF)'],
+          correct: fwd ? 0 : 1,
+          explain: fwd
+            ? 'Forward bias pushes carriers toward the junction → depletion wall shrinks → current flows.'
+            : 'Reverse bias pulls carriers away → wall widens → no current.',
+        },
+        {
+          tag: 'Depletion wall',
+          question: 'Which way will the depletion region move?',
+          options: ['Shrink', 'Widen', 'Stay the same'],
+          correct: fwd ? 0 : 1,
+          explain: fwd
+            ? 'Forward bias drives carriers INTO the junction, so the insulating wall shrinks.'
+            : 'Reverse bias pulls carriers AWAY from the junction, so the wall widens.',
+        },
+      ]);
+    }
+    if(biasSign !== 0) this._prevBias = biasSign;
+
     // depletion width: narrow in forward, wide in reverse
     const baseW = 36;
     this.depW = clamp(baseW - v*7, 8, 90);
@@ -795,35 +941,55 @@ SCENES.push({
     // electron-flow vs conventional-current arrows
     drawDualCurrentArrows(c, 60, devBot+30, W-120, forward);
 
+    // FEATURE 3a: warn as we approach reverse breakdown
+    if(reverse && v <= this.breakdownV + 2 && !this.destroyed){
+      label(c, W/2, devTop-48, `⚠ Approaching breakdown voltage (${this.breakdownV} V)`, {align:'center', size:12, weight:'700', color:'#ffb454'});
+    }
+
     // ---- IV curve mini-graph ----
     this.drawIV(c);
+
+    // FEATURE 3a: the breakdown surge + destroyed overlay (drawn on top)
+    if(this.destroyed){
+      c.save(); c.fillStyle=COLORS.free;
+      this.burst.forEach(b=>{ c.globalAlpha=clamp(b.life,0,1); drawFreeElectron(c,b.x,b.y,7); });
+      c.restore();
+      drawDestroyed(c, this.destroyT, '💨 Smoke — diode destroyed');
+    }
   },
   drawIV(c){
     const gx=W-250, gy=H-138, gw=220, gh=120;
     c.fillStyle='rgba(20,26,38,0.9)'; c.strokeStyle='#33405e'; roundRect(c,gx,gy,gw,gh,8); c.fill(); c.stroke();
     label(c,gx+10,gy+6,'Diode I–V curve',{size:12,weight:'700',color:'#bcd0ff'});
-    const ox=gx+gw/2, oy=gy+gh*0.62; // origin (0V,0I)
+    // origin shifted right so the extended reverse range (to −12 V) fits
+    const ox=gx+gw*0.66, oy=gy+gh*0.55;
+    const vToX=(vv)=> ox + (vv>=0 ? (vv/5)*(gw*0.30) : (vv/12)*(gw*0.58));
+    const iToY=(i)=> oy - i*((gh*0.4)/4);
     // axes
     c.strokeStyle='#46506a'; c.lineWidth=1;
-    c.beginPath(); c.moveTo(gx+12,oy); c.lineTo(gx+gw-12,oy); c.stroke(); // V axis
-    c.beginPath(); c.moveTo(ox,gy+22); c.lineTo(ox,gy+gh-10); c.stroke(); // I axis
+    c.beginPath(); c.moveTo(gx+12,oy); c.lineTo(gx+gw-12,oy); c.stroke();
+    c.beginPath(); c.moveTo(ox,gy+22); c.lineTo(ox,gy+gh-10); c.stroke();
     label(c,gx+gw-12,oy+2,'V',{size:10,color:COLORS.dim,align:'right'});
     label(c,ox+4,gy+22,'I',{size:10,color:COLORS.dim});
-    // the diode curve: ~0 for V<0.6, sharp rise after
+    // FEATURE 3a: mark the breakdown voltage with a dashed red line
+    const bx=vToX(this.breakdownV);
+    c.strokeStyle='rgba(223,123,123,0.7)'; c.setLineDash([3,3]);
+    c.beginPath(); c.moveTo(bx,gy+22); c.lineTo(bx,gy+gh-10); c.stroke(); c.setLineDash([]);
+    label(c,bx,gy+gh-12,'breakdown',{size:9,color:'#df8b8b',align:'center'});
+    // diode curve: ~0 below 0.6 V, sharp rise forward; breakdown plunge in reverse
+    const ivAt=(vv)=> vv>0.6? Math.min((vv-0.6)*1.6,4)
+                     : vv<=this.breakdownV? -4
+                     : vv<-0.2? -0.15:0;
     c.strokeStyle=COLORS.free; c.lineWidth=2; c.beginPath();
-    for(let vv=-5; vv<=5; vv+=0.1){
-      const x = ox + (vv/5)*(gw/2-14);
-      let i = vv>0.6? Math.min((vv-0.6)*1.6,4):(vv<-0.2?-0.15:0);
-      const y = oy - i*((gh*0.4)/4);
-      vv===-5? c.moveTo(x,y):c.lineTo(x,y);
+    for(let vv=-12; vv<=5; vv+=0.1){
+      const x=vToX(vv), y=iToY(ivAt(vv));
+      vv===-12? c.moveTo(x,y):c.lineTo(x,y);
     }
     c.stroke();
     // current operating point
     const v=effVoltage();
-    const px = ox + (v/5)*(gw/2-14);
-    let pi = v>0.6? Math.min((v-0.6)*1.6,4):(v<-0.2?-0.15:0);
-    const py = oy - pi*((gh*0.4)/4);
-    c.fillStyle='#fff'; c.beginPath(); c.arc(px,py,4,0,Math.PI*2); c.fill();
+    c.fillStyle=this.destroyed?'#df6b6b':'#fff';
+    c.beginPath(); c.arc(vToX(clamp(v,-12,5)),iToY(ivAt(v)),4,0,Math.PI*2); c.fill();
   },
 });
 
@@ -1077,10 +1243,11 @@ SCENES.push({
    ===================================================================== */
 
 // Compute current band geometry (scene 3 needs it outside draw).
-function computeBands(){
+function computeBands(gapFrac){
   const x=90, w=W-180, top=40, bottom=H-40;
-  const cbH=(bottom-top)*0.33, vbTop=top+(bottom-top)*0.62;
-  return { cb:{x,y:top,w,h:cbH}, gap:{x,y:top+cbH,w,h:vbTop-(top+cbH)}, vb:{x,y:vbTop,w,h:bottom-vbTop} };
+  const span=bottom-top;
+  const cbH=span*0.30, gapH=span*(gapFrac ?? 0.29), vbTop=top+cbH+gapH;
+  return { cb:{x,y:top,w,h:cbH}, gap:{x,y:top+cbH,w,h:gapH}, vb:{x,y:vbTop,w,h:bottom-vbTop} };
 }
 
 // Draw BOTH the electron-flow arrow and the conventional-current arrow,
@@ -1098,6 +1265,229 @@ function drawDualCurrentArrows(c, x, y, w, active){
   c.beginPath(); c.moveTo(x+w, y+18); c.lineTo(x+w*0.6, y+18); c.stroke();
   c.beginPath(); c.moveTo(x+w*0.6,y+18); c.lineTo(x+w*0.6+8,y+13); c.lineTo(x+w*0.6+8,y+23); c.closePath(); c.fill();
   label(c, x+w, y-2, 'conventional current  (+ → −)', {color:COLORS.hole, size:11, weight:'600', align:'right'});
+  c.restore();
+}
+
+
+/* =====================================================================
+   FEATURE 1 — PREDICT-THEN-REVEAL ENGINE
+   ---------------------------------------------------------------------
+   A small modal state-machine. Any "determinate" event (one whose
+   outcome is fixed by physics) calls PREDICT.ask(spec) or
+   PREDICT.askSequence([spec, ...]) BEFORE its animation is allowed to
+   play. While a card is up the sim is frozen (STATE.predictFreeze). The
+   user must click an answer; we then highlight it, unfreeze so the
+   animation plays, and show a ✅/❌ banner + explanation with
+   "Run again" / "Continue".
+
+   spec = {
+     tag:        small label, e.g. "Diode bias"
+     question:   string
+     options:    [ "Conduct (ON)", "Block (OFF)" ]
+     correct:    index of the right option
+     explain:    one-sentence reason shown on reveal
+     onRunAgain: optional () => void  (replay the animation)
+   }
+   The scoreboard ("Predictions: x/y correct") is in-memory only and
+   resets on reload (no localStorage), per spec.
+   ===================================================================== */
+const PREDICT = {
+  enabled: true,
+  score: { correct: 0, total: 0 },
+  active: false,
+  queue: [],
+  spec: null,
+  firedKeys: {},          // dedupe one-shot triggers (e.g. temp thresholds)
+
+  overlay: () => document.getElementById('predictOverlay'),
+  card:    () => document.getElementById('predictCard'),
+
+  // Has this one-shot trigger already fired this session?
+  once(key) {
+    if (this.firedKeys[key]) return false;
+    this.firedKeys[key] = true;
+    return true;
+  },
+
+  ask(spec) { this.askSequence([spec]); },
+
+  // Ask one or more predictions back-to-back (e.g. diode: conduct? + wall?).
+  askSequence(specs) {
+    // If predict-first is OFF, behave like the original sim (run immediately).
+    if (!STATE.predictFirst) return;
+    if (this.active) return;                // don't stack cards
+    this.queue = specs.slice();
+    this.active = true;
+    STATE.predictFreeze = true;             // pause the animation
+    this._next();
+  },
+
+  _next() {
+    if (this.queue.length === 0) { this._finish(); return; }
+    this.spec = this.queue.shift();
+    this._renderQuestion();
+    this.overlay().classList.remove('hidden', 'revealed');
+  },
+
+  _renderQuestion() {
+    const s = this.spec;
+    const card = this.card();
+    card.innerHTML = '';
+    const tag = el('div', 'predict-tag', s.tag || 'Predict first');
+    const q = el('div', 'predict-q', s.question);
+    const opts = el('div', 'predict-opts');
+    s.options.forEach((label, i) => {
+      const b = el('button', 'predict-opt', label);
+      b.onclick = () => this._choose(i);
+      opts.appendChild(b);
+    });
+    card.appendChild(tag); card.appendChild(q); card.appendChild(opts);
+  },
+
+  _choose(i) {
+    const s = this.spec;
+    const correct = i === s.correct;
+    this.score.total++;
+    if (correct) this.score.correct++;
+    updateScoreboard();
+    logEvent(`🔮 Prediction: you chose "${s.options[i]}" — ${correct ? 'CORRECT ✅' : 'not quite ❌'}.`, false);
+
+    // mark the option buttons
+    const btns = this.card().querySelectorAll('.predict-opt');
+    btns.forEach((b, j) => {
+      b.disabled = true;
+      if (j === i) b.classList.add('chosen', correct ? 'correct' : 'wrong');
+      if (j === s.correct) b.classList.add('correct');
+    });
+
+    // unfreeze so the animation actually plays behind the (now faded) card
+    STATE.predictFreeze = false;
+    this.overlay().classList.add('revealed');
+
+    // reveal banner + actions
+    const banner = el('div', 'predict-banner ' + (correct ? 'ok' : 'bad'),
+      correct ? '✅ Correct' : '❌ Not quite');
+    const expl = el('div', 'predict-expl',
+      (correct ? '' : `Correct answer: ${s.options[s.correct]}. `) + s.explain);
+    const actions = el('div', 'predict-actions');
+    const again = el('button', 'btn', '↻ Run again');
+    again.onclick = () => { if (s.onRunAgain) s.onRunAgain(); };
+    const cont = el('button', 'btn primary', 'Continue →');
+    cont.onclick = () => this._next();
+    actions.appendChild(again); actions.appendChild(cont);
+    this.card().appendChild(banner);
+    this.card().appendChild(expl);
+    this.card().appendChild(actions);
+  },
+
+  _finish() {
+    this.active = false; this.spec = null;
+    STATE.predictFreeze = false;
+    this.overlay().classList.add('hidden');
+    this.overlay().classList.remove('revealed');
+  },
+};
+
+// tiny DOM helper
+function el(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text !== undefined) e.textContent = text;
+  return e;
+}
+
+function updateScoreboard() {
+  const s = PREDICT.score;
+  document.getElementById('scoreboard').textContent =
+    `Predictions: ${s.correct}/${s.total} correct`;
+}
+
+
+/* =====================================================================
+   FEATURE 2 — LIVE "CAN IT CONDUCT?" PANEL
+   ---------------------------------------------------------------------
+   Reads the active scene's conduction() method each frame and renders the
+   master rule: conduction needs BOTH a connected "road" AND a partly-full
+   band. A scene returns null to hide the panel.
+
+   conduction() => {
+     road: bool,  roadWhy: '3-4 words',
+     band: bool,  bandWhy: '3-4 words',
+     weak: bool   (optional: appends a "weak" qualifier to CONDUCTS)
+   }
+   ===================================================================== */
+let _condSig = '';
+function updateConductionPanel() {
+  const panel = document.getElementById('conductionPanel');
+  const data = activeScene && activeScene.conduction ? activeScene.conduction() : null;
+  if (!data) { panel.classList.add('hidden'); _condSig = ''; return; }
+  panel.classList.remove('hidden');
+
+  // only touch the DOM when something actually changed
+  const sig = `${data.road}|${data.roadWhy}|${data.band}|${data.bandWhy}|${data.weak}`;
+  if (sig === _condSig) return;
+  _condSig = sig;
+
+  const mark = (id, ok) => {
+    const e = document.getElementById(id);
+    e.textContent = ok ? '✓' : '✗';
+    e.className = 'cond-mark ' + (ok ? 'yes' : 'no');
+  };
+  mark('condRoadMark', data.road);
+  mark('condBandMark', data.band);
+  document.getElementById('condRoadWhy').textContent = data.roadWhy || '';
+  document.getElementById('condBandWhy').textContent = data.bandWhy || '';
+
+  const conducts = data.road && data.band;
+  const res = document.getElementById('condResult');
+  res.className = 'cond-result ' + (conducts ? 'conducts' : 'no');
+  res.innerHTML = conducts
+    ? 'CONDUCTS' + (data.weak ? '<span class="weak">(weakly)</span>' : '')
+    : 'NO CURRENT';
+}
+
+
+/* =====================================================================
+   SHARED FAILURE-MODE GLYPHS (FEATURE 3)
+   ---------------------------------------------------------------------
+   Smoke + "destroyed" overlay (reverse breakdown / LED burnout) and the
+   red HEAT glyph emitted at crystal defects instead of a photon.
+   ===================================================================== */
+// A red wavy "heat" squiggle (energy released as heat, not light).
+function drawHeat(c, x, y, scale = 1, alpha = 1) {
+  c.save(); c.globalAlpha = alpha;
+  c.strokeStyle = '#ff6a4d'; c.lineWidth = 2;
+  for (let k = 0; k < 3; k++) {
+    c.beginPath();
+    const ox = (k - 1) * 6 * scale;
+    for (let i = 0; i <= 10; i++) {
+      const yy = y - i * 2.4 * scale;
+      const xx = x + ox + Math.sin(i * 0.9) * 3 * scale;
+      i === 0 ? c.moveTo(xx, yy) : c.lineTo(xx, yy);
+    }
+    c.stroke();
+  }
+  c.restore();
+}
+
+// Full-stage "destroyed" overlay with drifting smoke puffs. `t` animates it.
+function drawDestroyed(c, t, msg) {
+  c.save();
+  c.fillStyle = 'rgba(8,8,10,0.55)'; c.fillRect(0, 0, W, H);
+  // smoke puffs rising from the device center
+  for (let i = 0; i < 9; i++) {
+    const ph = (t * 0.4 + i * 0.37) % 1;
+    const x = W / 2 + Math.sin(i * 2 + t) * 60 + (i - 4) * 10;
+    const y = H / 2 - ph * 180;
+    const r = 14 + ph * 40;
+    c.globalAlpha = (1 - ph) * 0.5;
+    c.fillStyle = '#6b7280';
+    c.beginPath(); c.arc(x, y, r, 0, Math.PI * 2); c.fill();
+  }
+  c.globalAlpha = 1;
+  label(c, W / 2, H / 2 - 20, '💨', { align: 'center', size: 52 });
+  label(c, W / 2, H / 2 + 44, msg || 'Smoke — device destroyed', { align: 'center', size: 18, weight: '700', color: '#ff9a9a' });
+  label(c, W / 2, H / 2 + 72, 'Press Reset to rebuild it.', { align: 'center', size: 12, color: COLORS.dim });
   c.restore();
 }
 
@@ -1145,7 +1535,9 @@ function buildControls(scene) {
 
   keys.forEach(key => {
     if (key === 'voltage') {
-      addSlider('Voltage', -5, 5, STATE.voltage, 0.1, v => { STATE.voltage = v; }, v => `${v>0?'+':''}${v.toFixed(1)} V`);
+      // Diode uses an EXTENDED reverse range so reverse-breakdown (Feature 3a)
+      // is reachable. Breakdown is marked on-canvas at ≈ −10 V.
+      addSlider('Voltage  (reverse breakdown near −10 V)', -12, 5, STATE.voltage, 0.1, v => { STATE.voltage = v; }, v => `${v>0?'+':''}${v.toFixed(1)} V`);
     } else if (key === 'temperature') {
       addSlider('Temperature', 0, 100, STATE.temperature, 1, v => { STATE.temperature = v; }, v => `${v|0} / 100`);
     } else if (key === 'bandGap') {
@@ -1165,10 +1557,129 @@ function buildControls(scene) {
         btn.textContent = STATE.gateOn?'Gate: ON (1)':'Gate: OFF (0)';
         btn.className = 'btn toggle ' + (STATE.gateOn?'on':'off');
       });
+    } else if (key === 'dopant') {
+      // FEATURE 1: adding a dopant is a determinate event → predict first.
+      addButton('🧪 Add phosphorus (P)', 'btn', () => {
+        PREDICT.ask({
+          tag: 'Doping type',
+          question: 'Adding phosphorus (5 valence electrons) to silicon creates…?',
+          options: ['Extra free electrons (n-type)', 'Extra holes (p-type)'],
+          correct: 0,
+          explain: "Phosphorus's 5th electron has no bond to join → it becomes a free electron → n-type.",
+        });
+        logEvent('🧪 Doped with phosphorus (donor) → n-type: a free electron appears.');
+      });
+    } else if (key === 'material') {
+      // FEATURE 5: material picker (Si / GaAs / GaN)
+      addMaterialPicker();
+    } else if (key === 'resistor') {
+      // FEATURE 3b / 6: series resistor toggle + value slider (grayed when OFF)
+      addResistorControls();
+    } else if (key === 'crystalQuality') {
+      // FEATURE 3c: crystal-quality slider (perfect → defective)
+      addSlider('Crystal quality', 0, 100, (1 - STATE.crystalQuality) * 100, 1,
+        v => { STATE.crystalQuality = clamp(1 - v / 100, 0, 1); },
+        v => v >= 95 ? 'Perfect' : v <= 5 ? 'Very defective' : `${v|0}% perfect`);
+    } else if (key === 'spotlight') {
+      // FEATURE 4: spotlight-one-electron + step button
+      addSpotlightControls();
+    } else if (key === 'reset') {
+      // Generic reset for destroyed devices (Feature 3a/3b)
+      addButton('🔧 Reset device', 'btn', () => {
+        if (activeScene && activeScene.resetDevice) activeScene.resetDevice();
+        else if (activeScene && activeScene.setup) activeScene.setup();
+        logEvent('🔧 Device reset.', false);
+      });
     } else if (key === 'transport') {
       addTransport();
     }
   });
+}
+
+/* FEATURE 5 — material dropdown. Changing material updates the band gap,
+   photon color, lattice rendering and labels everywhere, and (Feature 1)
+   fires the "bigger gap = bluer" prediction. */
+function addMaterialPicker() {
+  const wrap = el('div', 'control');
+  const lab = el('label', null, 'Material: ');
+  const sel = document.createElement('select');
+  sel.className = 'mat-select';
+  Object.keys(MATERIALS).forEach(k => {
+    const o = document.createElement('option');
+    o.value = k; o.textContent = MATERIALS[k].name;
+    if (k === STATE.material) o.selected = true;
+    sel.appendChild(o);
+  });
+  sel.onchange = () => {
+    const prev = STATE.material;
+    const next = sel.value;
+    if (next === prev) return;
+    const biggerGap = MATERIALS[next].gapEV > MATERIALS[prev].gapEV;
+    // Predict-first: ask the color question BEFORE applying the change.
+    PREDICT.askSequence([{
+      tag: 'Band gap → color',
+      question: 'A BIGGER band gap produces a photon that is…?',
+      options: ['Redder (lower energy)', 'Bluer (higher energy)', 'Same color'],
+      correct: 1,
+      explain: 'Bigger gap = bigger energy drop = higher-energy photon = bluer light.',
+      onRunAgain: () => applyMaterial(next),
+    }]);
+    applyMaterial(next);
+    logEvent(`🧪 Material → ${MATERIALS[next].name} (gap ${MATERIALS[next].gapEV} eV, ${MATERIALS[next].colorName}). ${biggerGap ? 'Bigger gap → bluer.' : 'Smaller gap → redder.'}`);
+  };
+  lab.appendChild(sel);
+  wrap.appendChild(lab);
+  controlsEl.appendChild(wrap);
+}
+function applyMaterial(key) {
+  STATE.material = key;
+  // keep the legacy 0..100 bandGap roughly in sync (used by some labels)
+  STATE.bandGap = clamp(Math.round(MATERIALS[key].gapEV / 3.4 * 100), 0, 100);
+}
+
+/* FEATURE 3b / 6 — resistor toggle + value slider. The slider is disabled
+   (grayed) when the resistor is OFF, exactly like a real breadboard choice. */
+function addResistorControls() {
+  const toggle = addButton(
+    STATE.resistorOn ? 'Resistor: ON' : 'Resistor: OFF',
+    'btn toggle ' + (STATE.resistorOn ? 'on' : 'off'), null);
+  // value slider
+  const wrap = el('div', 'control');
+  const lab = el('label', null, 'Resistor value: ');
+  const valSpan = el('span', 'value', `${STATE.resistorVal} Ω`);
+  lab.appendChild(valSpan);
+  const inp = document.createElement('input');
+  inp.type = 'range'; inp.min = 0; inp.max = 1000; inp.step = 10; inp.value = STATE.resistorVal;
+  inp.oninput = () => { STATE.resistorVal = parseFloat(inp.value); valSpan.textContent = `${STATE.resistorVal} Ω`; };
+  inp.disabled = !STATE.resistorOn;
+  wrap.style.opacity = STATE.resistorOn ? '1' : '0.4';
+  wrap.appendChild(lab); wrap.appendChild(inp);
+
+  toggle.onclick = () => {
+    STATE.resistorOn = !STATE.resistorOn;
+    toggle.textContent = STATE.resistorOn ? 'Resistor: ON' : 'Resistor: OFF';
+    toggle.className = 'btn toggle ' + (STATE.resistorOn ? 'on' : 'off');
+    inp.disabled = !STATE.resistorOn;
+    wrap.style.opacity = STATE.resistorOn ? '1' : '0.4';
+    if (activeScene && activeScene.resetDevice) activeScene.resetDevice(); // un-burn if needed
+    logEvent(`🧰 Resistor ${STATE.resistorOn ? 'ON — current limited (safe).' : 'OFF — no current limit (danger!).'}`);
+  };
+  controlsEl.appendChild(wrap);
+}
+
+/* FEATURE 4 — spotlight toggle + per-stage Step button. */
+function addSpotlightControls() {
+  const btn = addButton('🔦 Spotlight one electron', 'btn', () => {
+    if (!activeScene || !activeScene.toggleSpotlight) return;
+    const on = activeScene.toggleSpotlight();
+    btn.textContent = on ? '🔦 Spotlight: ON' : '🔦 Spotlight one electron';
+    btn.classList.toggle('primary', on);
+    step.style.display = on ? '' : 'none';
+  });
+  const step = addButton('⏭ Step stage', 'btn', () => {
+    if (activeScene && activeScene.spotlightStep) activeScene.spotlightStep();
+  });
+  step.style.display = 'none';
 }
 
 function addSlider(labelText, min, max, val, step, onInput, fmt) {
@@ -1209,6 +1720,15 @@ document.getElementById('reducedMotion').onchange = (e) => {
   STATE.reducedMotion = e.target.checked;
   logEvent(`🐢 Reduced motion ${STATE.reducedMotion ? 'ON (slow)' : 'OFF'}.`, false);
 };
+
+// ---- FEATURE 1: Predict-first toggle (in-memory only) ----
+document.getElementById('predictFirst').onchange = (e) => {
+  STATE.predictFirst = e.target.checked;
+  logEvent(`🔮 Predict-first mode ${STATE.predictFirst ? 'ON' : 'OFF'}.`, false);
+  // closing the toggle mid-card shouldn't trap the user
+  if (!STATE.predictFirst && PREDICT.active) PREDICT._finish();
+};
+updateScoreboard();
 
 // ---- Glossary tooltips ----
 const tooltip = document.getElementById('tooltip');
